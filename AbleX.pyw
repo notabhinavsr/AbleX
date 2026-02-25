@@ -20,7 +20,6 @@ logging.basicConfig(
 )
 
 class LogRedirect:
-    """Redirect print() to both log file and nowhere (no console)."""
     def write(self, msg):
         if msg.strip():
             logging.info(msg.strip())
@@ -30,13 +29,13 @@ class LogRedirect:
 sys.stdout = LogRedirect()
 sys.stderr = LogRedirect()
 
-# ── Launch main app ──────────────────────────────────────
+# ── Launch GUI ───────────────────────────────────────────
 print(f"AbleX started at {datetime.now()}")
 
-# Add project directory to path
 project_dir = os.path.dirname(os.path.abspath(__file__))
 if project_dir not in sys.path:
     sys.path.insert(0, project_dir)
 
-# Run the main module
-import main
+from gui import AbleXApp
+app = AbleXApp()
+app.run()
