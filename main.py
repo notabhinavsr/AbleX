@@ -1,18 +1,17 @@
 import serial
 import pyautogui
 import time
+import threading
 
-# ── CONFIG ───────────────────────────────────────────────
-COM_PORT    = "COM8"
-BAUD_RATE   = 115200
-SENSITIVITY = 1
-DEADZONE    = 2
+from config import COM_PORT, BAUD_RATE, SENSITIVITY, DEADZONE
+from stt_handler import trigger_stt, is_listening
 
 # ── SETUP ────────────────────────────────────────────────
+print("[AbleX] Starting...")
 print(f"[INFO] Opening {COM_PORT}...")
 ser = serial.Serial(COM_PORT, BAUD_RATE, timeout=1)
 
-# Toggle DTR/RTS to reset ESP32 (forces reboot so it starts sending)
+# Toggle DTR/RTS to reset ESP32
 ser.dtr = False
 ser.rts = False
 time.sleep(0.1)
@@ -29,7 +28,59 @@ pyautogui.PAUSE = 0
 screen_w, screen_h = pyautogui.size()
 print(f"[INFO] Connected to {COM_PORT}")
 print(f"[INFO] Screen: {screen_w}x{screen_h}")
-print("[INFO] Waiting for ESP32 data...\n")
+print("[INFO] Controls:")
+print("       Short press x1 = Left click (select)")
+print("       Short press x2 = Double click (open)")
+print("       Short press x3 = Right click")
+print("       Long  press    = Voice typing (STT)")
+print("[AbleX] Ready!\n")
+
+# ── CLICK PATTERN DETECTION ──────────────────────────────
+CLICK_WAIT = 0.5  # seconds to wait after last CLK before deciding
+
+click_count = 0
+click_timer = None
+click_lock = threading.Lock()
+
+
+def _execute_click_action():
+    """Called after CLICK_WAIT — executes action based on click count."""
+    global click_count
+    with click_lock:
+        count = click_count
+        click_count = 0
+
+    if count == 1:
+        print("[CLICK] Single → Left click (select)")
+        pyautogui.click(button='left')
+    elif count == 2:
+        print("[CLICK] Double → Double click (open)")
+        pyautogui.doubleClick(button='left')
+    elif count >= 3:
+        print("[CLICK] Triple → Right click")
+        pyautogui.click(button='right')
+
+
+def handle_click():
+    """Register a CLK event and schedule action after CLICK_WAIT."""
+    global click_count, click_timer
+    with click_lock:
+        click_count += 1
+        current = click_count
+
+    # Cancel previous timer
+    if click_timer is not None:
+        click_timer.cancel()
+
+    # Triple-click: fire immediately
+    if current >= 3:
+        _execute_click_action()
+    else:
+        # Wait to see if more clicks come
+        click_timer = threading.Timer(CLICK_WAIT, _execute_click_action)
+        click_timer.daemon = True
+        click_timer.start()
+
 
 # ── MAIN LOOP ────────────────────────────────────────────
 empty_count = 0
@@ -39,31 +90,30 @@ while True:
 
         if not raw or raw.strip() == b'':
             empty_count += 1
-            if empty_count % 20 == 0:
+            if empty_count % 50 == 0:
                 print(f"[WAIT] No data... ({empty_count} timeouts)")
-                # Show how many bytes are waiting in the buffer
-                print(f"       Bytes in buffer: {ser.in_waiting}")
             continue
 
-        # Got data — print it raw for debugging
         empty_count = 0
         line = raw.decode(errors='ignore').strip()
         if not line:
             continue
 
-        # ───── CLICK COMMANDS ─────
-        if line in ("LC", "C,L"):
-            print("[CLICK] LEFT")
-            pyautogui.click(button='left')
+        # ───── BUTTON PRESS (short press) ─────
+        if line in ("CLK", "LC", "C,L"):
+            handle_click()
             continue
 
+        # ───── RIGHT CLICK (long press) ─────
         if line in ("RC", "C,R"):
-            print("[CLICK] RIGHT")
-            pyautogui.click(button='right')
+            if not is_listening():
+                print("[STT] ✦ Long press → Starting voice typing...")
+                trigger_stt()
+            else:
+                print("[STT] Already listening...")
             continue
 
         # ───── CURSOR MOVEMENT ─────
-        # Supports both "dx,dy" and "M,dx,dy" formats
         if "," in line:
             parts = line.split(",")
 
@@ -74,14 +124,12 @@ while True:
             elif len(parts) == 3 and parts[0] == "M":
                 dx_str, dy_str = parts[1], parts[2]
             else:
-                print(f"[DATA] {line}")
                 continue
 
             try:
                 dx = float(dx_str)
                 dy = float(dy_str)
             except ValueError:
-                print(f"[WARN] Bad data: {line}")
                 continue
 
             # Deadzone
@@ -94,15 +142,10 @@ while True:
             move_y = int(-dy * SENSITIVITY)
 
             if move_x != 0 or move_y != 0:
-                print(f"[MOVE] ({move_x}, {move_y})")
                 pyautogui.moveRel(move_x, move_y, _pause=False)
 
-        else:
-            print(f"[DATA] {line}")
-
-
     except KeyboardInterrupt:
-        print("\n[INFO] Stopped")
+        print("\n[AbleX] Stopped")
         break
 
     except Exception as e:
