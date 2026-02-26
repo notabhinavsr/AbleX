@@ -13,7 +13,7 @@ from stt_handler import trigger_stt, is_listening
 
 
 # ── State for GUI ────────────────────────────────────────
-connection_status = "disconnected"   # "connected" / "disconnected" / "error"
+connection_status = "disconnected"
 _serial_thread = None
 _running = False
 
@@ -23,18 +23,52 @@ def get_status():
 
 
 # ── CLICK PATTERN DETECTION ──────────────────────────────
-CLICK_WAIT = 0.5
+# Simple timestamp-based approach — no threading timers.
+# Each CLK increments click_count and records the time.
+# The serial loop checks on every iteration if the window expired.
+CLICK_WAIT = 1.0  # 1 second window — generous for limited mobility users
 
 click_count = 0
-click_timer = None
-click_lock = threading.Lock()
+last_click_time = 0
 
 
-def _execute_click_action():
-    global click_count
-    with click_lock:
-        count = click_count
+def handle_click():
+    """Register a click event."""
+    global click_count, last_click_time
+    now = time.time()
+
+    # If too long since last click, start fresh count
+    if now - last_click_time > CLICK_WAIT:
         click_count = 0
+
+    click_count += 1
+    last_click_time = now
+    print(f"[CLICK] Press #{click_count}...")
+
+    # Triple-click: fire right-click immediately
+    if click_count >= 3:
+        print("[CLICK] Triple → Right click")
+        pyautogui.click(button='right')
+        click_count = 0
+        last_click_time = 0
+
+
+def check_pending_clicks():
+    """Check if click window has expired and fire the action.
+    Called every serial loop iteration."""
+    global click_count, last_click_time
+
+    if click_count == 0 or last_click_time == 0:
+        return
+
+    elapsed = time.time() - last_click_time
+    if elapsed < CLICK_WAIT:
+        return  # still waiting for more clicks
+
+    # Window expired — fire based on count
+    count = click_count
+    click_count = 0
+    last_click_time = 0
 
     if count == 1:
         print("[CLICK] Single → Left click")
@@ -42,31 +76,10 @@ def _execute_click_action():
     elif count == 2:
         print("[CLICK] Double → Double click")
         pyautogui.doubleClick(button='left')
-    elif count >= 3:
-        print("[CLICK] Triple → Right click")
-        pyautogui.click(button='right')
-
-
-def handle_click():
-    global click_count, click_timer
-    with click_lock:
-        click_count += 1
-        current = click_count
-
-    if click_timer is not None:
-        click_timer.cancel()
-
-    if current >= 3:
-        _execute_click_action()
-    else:
-        click_timer = threading.Timer(CLICK_WAIT, _execute_click_action)
-        click_timer.daemon = True
-        click_timer.start()
 
 
 # ── SERIAL LOOP (runs in thread) ─────────────────────────
 def start_serial_loop():
-    """Start the serial communication loop in a background thread."""
     global _serial_thread, _running
     if _serial_thread and _serial_thread.is_alive():
         print("[WARN] Serial loop already running")
@@ -86,7 +99,7 @@ def _serial_loop():
 
     try:
         print(f"[INFO] Opening {config.COM_PORT}...")
-        ser = serial.Serial(config.COM_PORT, config.BAUD_RATE, timeout=1)
+        ser = serial.Serial(config.COM_PORT, config.BAUD_RATE, timeout=0.1)
 
         ser.dtr = False
         ser.rts = False
@@ -110,31 +123,29 @@ def _serial_loop():
     pyautogui.FAILSAFE = False
     pyautogui.PAUSE = 0
 
-    empty_count = 0
     while _running:
         try:
             raw = ser.readline()
 
+            # Check pending clicks every iteration (even on empty reads)
+            check_pending_clicks()
+
             if not raw or raw.strip() == b'':
-                empty_count += 1
-                if empty_count % 50 == 0:
-                    print(f"[WAIT] No data... ({empty_count} timeouts)")
                 continue
 
-            empty_count = 0
             line = raw.decode(errors='ignore').strip()
             if not line:
                 continue
 
-            # ───── BUTTON PRESS ─────
+            # ───── BUTTON 1 → CLICK ─────
             if line in ("CLK", "LC", "C,L"):
                 handle_click()
                 continue
 
-            # ───── LONG PRESS → STT ─────
-            if line in ("RC", "C,R"):
+            # ───── BUTTON 2 → STT ─────
+            if line == "STT":
                 if not is_listening():
-                    print("[STT] ✦ Long press → Voice typing...")
+                    print("[STT] ✦ Button 2 → Voice typing...")
                     trigger_stt()
                 else:
                     print("[STT] Already listening...")
@@ -191,15 +202,13 @@ if __name__ == "__main__":
     screen_w, screen_h = pyautogui.size()
     print(f"[INFO] Screen: {screen_w}x{screen_h}")
     print("[INFO] Controls:")
-    print("       Short press x1 = Left click")
-    print("       Short press x2 = Double click")
-    print("       Short press x3 = Right click")
-    print("       Long  press    = Voice typing (STT)")
+    print("       Button 1: x1=select, x2=open, x3=right-click")
+    print("       Button 2: Voice typing (STT)")
 
     start_serial_loop()
     try:
         while True:
-            time.sleep(1)
+            time.sleep(0.1)
     except KeyboardInterrupt:
         stop_serial_loop()
         print("\n[AbleX] Stopped")

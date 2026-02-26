@@ -6,20 +6,21 @@ MPU6050 mpu;
 float sensitivity = 0.4;
 int deadZone = 1;
 
-const int switchPin = 4;
+const int btn1Pin = 4;    // Button 1: click (select/double/right)
+const int btn2Pin = 5;    // Button 2: STT voice typing
 
-// ── Click detection ────────────────────────────────────
-bool lastBtnState = HIGH;
-unsigned long pressStartTime = 0;
-bool pressed = false;
+// ── Button 1 (click) ───────────────────────────────────
+bool lastBtn1State = HIGH;
 
-const unsigned long LONG_PRESS_MS = 600;  // hold > 600ms = right click
+// ── Button 2 (STT) ─────────────────────────────────────
+bool lastBtn2State = HIGH;
 
 void setup() {
   Serial.begin(115200);
   Wire.begin(21, 22);
 
-  pinMode(switchPin, INPUT_PULLUP);
+  pinMode(btn1Pin, INPUT_PULLUP);
+  pinMode(btn2Pin, INPUT_PULLUP);
 
   mpu.initialize();
 
@@ -51,28 +52,27 @@ void loop() {
   Serial.print(",");
   Serial.println(dy);
 
-  // ===== BUTTON → CLICK EVENTS =====
-  bool currentState = digitalRead(switchPin);
+  // ===== BUTTON 1 → CLICK (with debounce) =====
+  bool btn1State = digitalRead(btn1Pin);
 
-  // Button pressed (falling edge: HIGH → LOW)
-  if (lastBtnState == HIGH && currentState == LOW) {
-    pressStartTime = millis();
-    pressed = true;
-  }
-
-  // Button released (rising edge: LOW → HIGH)
-  if (lastBtnState == LOW && currentState == HIGH && pressed) {
-    unsigned long holdTime = millis() - pressStartTime;
-    pressed = false;
-
-    if (holdTime >= LONG_PRESS_MS) {
-      Serial.println("RC");    // Long press → Right click
-    } else {
-      Serial.println("CLK");   // Short press → Python counts for single/double/triple
+  if (lastBtn1State == LOW && btn1State == HIGH) {
+    // Debounce: wait 50ms and re-read
+    delay(50);
+    btn1State = digitalRead(btn1Pin);
+    if (btn1State == HIGH) {
+      Serial.println("CLK");
     }
   }
+  lastBtn1State = btn1State;
 
-  lastBtnState = currentState;
+  // ===== BUTTON 2 → STT =====
+  bool btn2State = digitalRead(btn2Pin);
+
+  // Button pressed (falling edge) = trigger STT
+  if (lastBtn2State == HIGH && btn2State == LOW) {
+    Serial.println("STT");
+  }
+  lastBtn2State = btn2State;
 
   delay(5);
 }
