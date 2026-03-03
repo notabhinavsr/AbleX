@@ -16,10 +16,25 @@ from stt_handler import trigger_stt, is_listening
 connection_status = "disconnected"
 _serial_thread = None
 _running = False
+cursor_control_enabled = True   # toggled by 7s long-press on btn1
+_cursor_toggle_callbacks = []   # list of fn(bool) called on cursor toggle
 
 
 def get_status():
     return connection_status
+
+
+def add_cursor_toggle_callback(fn):
+    """Register a callback: fn(enabled: bool) called when cursor control is toggled."""
+    _cursor_toggle_callbacks.append(fn)
+
+
+def _notify_cursor_toggle(enabled):
+    for fn in _cursor_toggle_callbacks:
+        try:
+            fn(enabled)
+        except Exception:
+            pass
 
 
 # ── CLICK PATTERN DETECTION ──────────────────────────────
@@ -142,13 +157,22 @@ def _serial_loop():
                 handle_click()
                 continue
 
-            # ───── BUTTON 2 → STT ─────
+            # ───── STT (btn1 3s long-press) ─────
             if line == "STT":
                 if not is_listening():
-                    print("[STT] ✦ Button 2 → Voice typing...")
+                    print("[STT] ✦ Button 1 (3s) → Voice typing...")
                     trigger_stt()
                 else:
                     print("[STT] Already listening...")
+                continue
+
+            # ───── CURSOR TOGGLE (btn1 7s long-press) ─────
+            if line == "CURSOR_TOGGLE":
+                global cursor_control_enabled
+                cursor_control_enabled = not cursor_control_enabled
+                state = "ON" if cursor_control_enabled else "OFF"
+                print(f"[CURSOR] Control {state}")
+                _notify_cursor_toggle(cursor_control_enabled)
                 continue
 
             # ───── CURSOR MOVEMENT ─────
@@ -174,6 +198,9 @@ def _serial_loop():
                     dx = 0
                 if abs(dy) < config.DEADZONE:
                     dy = 0
+
+                if not cursor_control_enabled:
+                    continue
 
                 move_x = int(-dx * config.SENSITIVITY)
                 move_y = int(-dy * config.SENSITIVITY)
@@ -202,8 +229,8 @@ if __name__ == "__main__":
     screen_w, screen_h = pyautogui.size()
     print(f"[INFO] Screen: {screen_w}x{screen_h}")
     print("[INFO] Controls:")
-    print("       Button 1: x1=select, x2=open, x3=right-click")
-    print("       Button 2: Voice typing (STT)")
+    print("       Button 1: click / 3s=STT / 7s=cursor toggle")
+    print("       Button 2: (unused)")
 
     start_serial_loop()
     try:

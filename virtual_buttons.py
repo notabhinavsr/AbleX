@@ -40,6 +40,25 @@ def save_buttons(buttons_data):
 
 def execute_action(action, value):
     """Execute a virtual button action."""
+    if action == "macro":
+        for step in value.split(';'):
+            step = step.strip()
+            if not step: continue
+            if ':' in step:
+                act, val = step.split(':', 1)
+                execute_action(act.strip(), val.strip())
+            else:
+                execute_action(step.strip(), "")
+        return
+    elif action == "sleep":
+        import time
+        try:
+            time.sleep(float(value))
+            print(f"[VBTN] Sleep: {value}s")
+        except ValueError:
+            pass
+        return
+
     if action == "key":
         print(f"[VBTN] Key: {value}")
         pyautogui.press(value)
@@ -56,9 +75,16 @@ def execute_action(action, value):
         print(f"[VBTN] Hotkey: {'+'.join(keys)}")
         pyautogui.hotkey(*keys)
     elif action == "click":
-        btn = value if value else "left"
-        print(f"[VBTN] Click: {btn}")
-        pyautogui.click(button=btn)
+        parts = [p.strip() for p in value.split(",")] if value else []
+        btn = parts[0] if len(parts) > 0 and parts[0] else "left"
+        clicks = 1
+        if len(parts) > 1:
+            try:
+                clicks = int(parts[1])
+            except ValueError:
+                pass
+        print(f"[VBTN] Click: {btn} x{clicks}")
+        pyautogui.click(button=btn, clicks=clicks)
     elif action == "type":
         print(f"[VBTN] Type: {value}")
         pyautogui.write(value, interval=0.02)
@@ -179,13 +205,15 @@ class VirtualButtonManager:
 
     def add_button(self, label, tooltip, action, value):
         """Add a new virtual button."""
+        screen_w = self.parent.winfo_screenwidth()
+        screen_h = self.parent.winfo_screenheight()
         data = {
             "label": label,
             "tooltip": tooltip,
             "action": action,
             "value": value,
-            "x": 50,
-            "y": 100 + len(self.buttons_data) * 70,
+            "x": screen_w // 2 - int(BTN_SIZE) // 2,
+            "y": screen_h // 2 - int(BTN_SIZE) // 2,
         }
         self.buttons_data.append(data)
         fb = FloatingButton(self.parent, data, len(self.floating_buttons), on_move=self._save)

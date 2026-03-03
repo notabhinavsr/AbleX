@@ -1,0 +1,6 @@
+{
+  "COM_PORT": "COM8",
+  "SENSITIVITY": 1,
+  "DEADZONE": 2,
+  "SILENCE_TIMEOUT": 6
+}

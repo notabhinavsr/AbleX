@@ -13,7 +13,7 @@ import threading
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import config
-from main import start_serial_loop, stop_serial_loop, get_status
+from main import start_serial_loop, stop_serial_loop, get_status, add_cursor_toggle_callback
 from stt_handler import add_state_callback, trigger_stt, is_listening
 from notification import NotificationOverlay
 from virtual_buttons import VirtualButtonManager, load_buttons, save_buttons
@@ -45,6 +45,7 @@ class AbleXApp:
         # ── Notification overlay ─────────────────────────
         self.notification = NotificationOverlay()
         add_state_callback(self._on_stt_state_safe)
+        add_cursor_toggle_callback(self._on_cursor_toggle_safe)
 
         # ── Virtual buttons ──────────────────────────────
         self.vbtn_manager = VirtualButtonManager(self.root)
@@ -267,8 +268,8 @@ class AbleXApp:
             fields[lbl] = var
 
         tk.Label(
-            dlg, text="Actions: key, scroll, stt, hotkey, click, type",
-            fg=FG_DIM, bg=BG2, font=("Segoe UI", 8)
+            dlg, text="Actions: key, scroll, stt, hotkey, click, type, sleep, macro\nEx: click -> left,3 (triple click)\nEx: macro -> click:left; sleep:1; type:hi",
+            fg=FG_DIM, bg=BG2, font=("Segoe UI", 8), justify="left"
         ).grid(row=4, column=0, columnspan=2, padx=10, pady=(0, 5))
 
         def add():
@@ -293,7 +294,7 @@ class AbleXApp:
         frame.pack(fill="x", side="bottom")
 
         tk.Label(
-            frame, text="Right-click drag to reposition virtual buttons",
+            frame, text="Right-click and drag gently to reposition your virtual buttons",
             font=("Segoe UI", 8), fg=FG_DIM, bg=BG
         ).pack()
 
@@ -358,6 +359,21 @@ class AbleXApp:
         elif state == "error":
             self.stt_label.config(text="❌ Error", fg=RED)
             self.root.after(3000, lambda: self.stt_label.config(text=""))
+
+    # ── CURSOR TOGGLE CALLBACK (thread-safe) ─────────────
+    def _on_cursor_toggle_safe(self, enabled):
+        """Called from serial thread — schedule on main thread."""
+        self.root.after(0, lambda: self._on_cursor_toggle(enabled))
+
+    def _on_cursor_toggle(self, enabled):
+        if enabled:
+            self.notification.show(
+                "✅  Cursor Control ON", color="#00ff88", auto_hide=2.5
+            )
+        else:
+            self.notification.show(
+                "⛔  Cursor Control OFF", color="#ff4455", auto_hide=2.5
+            )
 
     # ── CLOSE ────────────────────────────────────────────
     def _on_close(self):
