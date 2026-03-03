@@ -13,7 +13,8 @@ import threading
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import config
-from main import start_serial_loop, stop_serial_loop, get_status, add_cursor_toggle_callback
+from main import (start_serial_loop, stop_serial_loop, get_status,
+                  add_cursor_toggle_callback, toggle_servo_mode, add_servo_mode_callback)
 from stt_handler import add_state_callback, trigger_stt, is_listening
 from notification import NotificationOverlay
 from virtual_buttons import VirtualButtonManager, load_buttons, save_buttons
@@ -35,7 +36,7 @@ class AbleXApp:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("AbleX — Gesture Controller")
-        self.root.geometry("420x620")
+        self.root.geometry("480x660")
         self.root.configure(bg=BG)
         self.root.resizable(False, False)
 
@@ -46,6 +47,7 @@ class AbleXApp:
         self.notification = NotificationOverlay()
         add_state_callback(self._on_stt_state_safe)
         add_cursor_toggle_callback(self._on_cursor_toggle_safe)
+        add_servo_mode_callback(self._on_servo_mode_safe)
 
         # ── Virtual buttons ──────────────────────────────
         self.vbtn_manager = VirtualButtonManager(self.root)
@@ -54,8 +56,8 @@ class AbleXApp:
         self._build_header()
         self._build_status()
         self._build_settings()
+        self._build_footer()       # pack footer BEFORE vbtn panel so it gets space
         self._build_vbtn_panel()
-        self._build_footer()
 
         # ── Start serial ─────────────────────────────────
         self.root.after(500, self._start_serial)
@@ -313,6 +315,16 @@ class AbleXApp:
             command=self._reconnect, cursor="hand2"
         ).pack(side="left", padx=5)
 
+        row2 = tk.Frame(frame, bg=BG)
+        row2.pack(pady=(5, 0))
+
+        self.servo_btn = tk.Button(
+            row2, text="🔧 Hardware Control", font=("Segoe UI", 9, "bold"),
+            bg=BG3, fg=FG, relief="flat", padx=14, pady=4,
+            command=self._toggle_servo, cursor="hand2"
+        )
+        self.servo_btn.pack()
+
     def _test_stt(self):
         if not is_listening():
             trigger_stt()
@@ -320,6 +332,9 @@ class AbleXApp:
     def _reconnect(self):
         stop_serial_loop()
         self.root.after(500, self._start_serial)
+
+    def _toggle_servo(self):
+        toggle_servo_mode()
 
     # ── SERIAL STARTUP ───────────────────────────────────
     def _start_serial(self):
@@ -373,6 +388,23 @@ class AbleXApp:
         else:
             self.notification.show(
                 "⛔  Cursor Control OFF", color="#ff4455", auto_hide=2.5
+            )
+
+    # ── SERVO MODE CALLBACK (thread-safe) ───────────────
+    def _on_servo_mode_safe(self, enabled):
+        """Called from main thread or serial thread."""
+        self.root.after(0, lambda: self._on_servo_mode(enabled))
+
+    def _on_servo_mode(self, enabled):
+        if enabled:
+            self.servo_btn.config(bg=ACCENT, fg=BG, text="🔧 Servo Active")
+            self.notification.show(
+                "🔧  Servo Mode ON", color="#00d4ff", auto_hide=2.5
+            )
+        else:
+            self.servo_btn.config(bg=BG3, fg=FG, text="🔧 Hardware Control")
+            self.notification.show(
+                "🖱️  Cursor Mode", color="#00ff88", auto_hide=2.5
             )
 
     # ── CLOSE ────────────────────────────────────────────

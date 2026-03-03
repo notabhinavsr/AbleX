@@ -1,13 +1,19 @@
 #include <Wire.h>
 #include <MPU6050.h>
+#include <ESP32Servo.h>
 
 MPU6050 mpu;
+Servo headServo;
 
 float sensitivity = 0.4;
 int deadZone = 1;
 
-const int btn1Pin = 4;    // Button 1: click / long-press STT / long-press cursor toggle
-const int btn2Pin = 5;    // Button 2: (unused)
+const int btn1Pin  = 4;    // Button 1: click / long-press STT / long-press cursor toggle
+const int btn2Pin  = 5;    // Button 2: (unused)
+const int servoPin = 18;   // Servo motor
+
+// ── Mode ───────────────────────────────────────────────
+bool servoMode = false;     // false = cursor, true = servo control
 
 // ── Button 1 (click + long-press) ──────────────────────
 bool lastBtn1State          = HIGH;
@@ -18,12 +24,19 @@ bool btn1CursorToggleSent    = false;   // true once 7s toggle has fired
 // ── Button 2 (unused) ──────────────────────────────────
 bool lastBtn2State = HIGH;
 
+// ── Servo smoothing ────────────────────────────────────
+int currentServoAngle = 90; // start at neutral
+
 void setup() {
   Serial.begin(115200);
   Wire.begin(21, 22);
 
   pinMode(btn1Pin, INPUT_PULLUP);
   pinMode(btn2Pin, INPUT_PULLUP);
+
+  headServo.setPeriodHertz(50);            // standard 50Hz servo
+  headServo.attach(servoPin, 544, 2400);   // min/max pulse width in µs for 0-180°
+  headServo.write(90);  // neutral position
 
   mpu.initialize();
 
@@ -37,7 +50,21 @@ void setup() {
 
 void loop() {
 
-  // ===== GYRO → CURSOR =====
+  // ===== READ SERIAL COMMANDS FROM PYTHON =====
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    if (cmd == "SERVO_ON") {
+      servoMode = true;
+      Serial.println("ACK_SERVO_ON");
+    } else if (cmd == "SERVO_OFF") {
+      servoMode = false;
+      headServo.write(90);  // return to neutral
+      Serial.println("ACK_SERVO_OFF");
+    }
+  }
+
+  // ===== GYRO READING =====
   int16_t gx, gy, gz;
   mpu.getRotation(&gx, &gy, &gz);
 
@@ -50,10 +77,24 @@ void loop() {
   int dx = yaw * sensitivity;
   int dy = pitch * sensitivity;
 
+  // Always send motion data so Python knows head position
   Serial.print("M,");
   Serial.print(dx);
   Serial.print(",");
   Serial.println(dy);
+
+  // ===== SERVO MODE → continuous rotation servo =====
+  // 90 = STOP, <90 = rotate one way, >90 = rotate other way
+  if (servoMode) {
+    if (abs(pitch) < 3) {
+      // Head is neutral → stop the servo
+      headServo.write(90);
+    } else {
+      // Map pitch to speed: ±30 deg/s → speed offset ±20 from 90
+      int speed = 90 + constrain(map((int)pitch, -30, 30, -20, 20), -20, 20);
+      headServo.write(speed);
+    }
+  }
 
   // ===== BUTTON 1 → CLICK / STT (3s+release) / CURSOR TOGGLE (7s) =====
   bool btn1State = digitalRead(btn1Pin);
@@ -100,9 +141,9 @@ void loop() {
   lastBtn1State = btn1State;
 
   // ===== BUTTON 2 (unused — reserved for future) =====
-  // btn2 read kept for potential future use
   bool btn2State = digitalRead(btn2Pin);
   lastBtn2State = btn2State;
 
   delay(5);
 }
+

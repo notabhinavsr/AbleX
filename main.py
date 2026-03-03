@@ -9,15 +9,18 @@ import time
 import threading
 
 import config
-from stt_handler import trigger_stt, is_listening
+from stt_handler import trigger_stt, is_listening, stop_stt
 
 
 # ── State for GUI ────────────────────────────────────────
 connection_status = "disconnected"
 _serial_thread = None
 _running = False
+_ser = None                     # serial port reference for writing commands
 cursor_control_enabled = True   # toggled by 7s long-press on btn1
+servo_mode = False              # toggled by GUI hardware control button
 _cursor_toggle_callbacks = []   # list of fn(bool) called on cursor toggle
+_servo_mode_callbacks = []      # list of fn(bool) called on servo mode toggle
 
 
 def get_status():
@@ -35,6 +38,42 @@ def _notify_cursor_toggle(enabled):
             fn(enabled)
         except Exception:
             pass
+
+
+def add_servo_mode_callback(fn):
+    """Register a callback: fn(enabled: bool) called when servo mode is toggled."""
+    _servo_mode_callbacks.append(fn)
+
+
+def _notify_servo_mode(enabled):
+    for fn in _servo_mode_callbacks:
+        try:
+            fn(enabled)
+        except Exception:
+            pass
+
+
+def send_serial_command(cmd):
+    """Write a command string to the ESP32 over serial."""
+    if _ser and _ser.is_open:
+        try:
+            _ser.write((cmd + "\n").encode())
+            print(f"[SERIAL] Sent: {cmd}")
+        except Exception as e:
+            print(f"[SERIAL] Write error: {e}")
+    else:
+        print("[SERIAL] Not connected — cannot send command")
+
+
+def toggle_servo_mode():
+    """Toggle servo mode on/off and send command to ESP32."""
+    global servo_mode
+    servo_mode = not servo_mode
+    if servo_mode:
+        send_serial_command("SERVO_ON")
+    else:
+        send_serial_command("SERVO_OFF")
+    _notify_servo_mode(servo_mode)
 
 
 # ── CLICK PATTERN DETECTION ──────────────────────────────
@@ -110,7 +149,7 @@ def stop_serial_loop():
 
 
 def _serial_loop():
-    global connection_status, _running
+    global connection_status, _running, _ser
 
     try:
         print(f"[INFO] Opening {config.COM_PORT}...")
@@ -127,6 +166,7 @@ def _serial_loop():
         ser.reset_output_buffer()
 
         connection_status = "connected"
+        _ser = ser  # store reference for send_serial_command
         print(f"[INFO] Connected to {config.COM_PORT}")
         print("[AbleX] Ready!\n")
 
@@ -152,9 +192,13 @@ def _serial_loop():
             if not line:
                 continue
 
-            # ───── BUTTON 1 → CLICK ─────
+            # ───── BUTTON 1 → CLICK (or stop STT if listening) ─────
             if line in ("CLK", "LC", "C,L"):
-                handle_click()
+                if is_listening():
+                    print("[STT] ⏹️  Button press → stopping STT")
+                    stop_stt()
+                else:
+                    handle_click()
                 continue
 
             # ───── STT (btn1 3s long-press) ─────
@@ -199,7 +243,7 @@ def _serial_loop():
                 if abs(dy) < config.DEADZONE:
                     dy = 0
 
-                if not cursor_control_enabled:
+                if not cursor_control_enabled or servo_mode:
                     continue
 
                 move_x = int(-dx * config.SENSITIVITY)

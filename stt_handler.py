@@ -24,6 +24,7 @@ from config import (
 
 
 _listening = False
+_stop_requested = False
 _lock = threading.Lock()
 _state_callbacks = []       # list of fn(state_str) to call on state changes
 
@@ -46,6 +47,13 @@ def is_listening():
     return _listening
 
 
+def stop_stt():
+    """Request the current STT recording to stop immediately."""
+    global _stop_requested
+    _stop_requested = True
+    print("[STT] ⏹️  Stop requested by button press")
+
+
 def _rms(audio_chunk):
     return np.sqrt(np.mean(audio_chunk.astype(np.float64) ** 2))
 
@@ -61,6 +69,10 @@ def _record_until_silence():
 
     with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype="int16") as stream:
         while True:
+            if _stop_requested:
+                print("[STT] ⏹️  Stopped by button press")
+                return None  # signal: no audio to transcribe
+
             data, _ = stream.read(chunk_samples)
             frames.append(data.copy())
             level = _rms(data)
@@ -121,15 +133,21 @@ def _type_text(text):
 
 
 def start_stt():
-    global _listening
+    global _listening, _stop_requested
     with _lock:
         if _listening:
             print("[STT] Already listening, ignoring...")
             return
         _listening = True
+        _stop_requested = False
 
     try:
         wav_buf = _record_until_silence()
+        if wav_buf is None:
+            # Recording was cancelled
+            _notify_state("done")
+            print("[STT] ✅ Cancelled\n")
+            return
         transcript = _transcribe(wav_buf)
         _type_text(transcript)
     except Exception as e:
@@ -137,6 +155,7 @@ def start_stt():
         _notify_state("error")
     finally:
         _listening = False
+        _stop_requested = False
         _notify_state("done")
         print("[STT] ✅ Done\n")
 
